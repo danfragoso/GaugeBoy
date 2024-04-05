@@ -1,0 +1,6 @@
+{
+  "label": "GaugeBoy",
+  "icon": "./assets/icn.png",
+  "launch": "launch.sh",
+  "description": "ODB2 Gauge Display"
+}
