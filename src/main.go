@@ -8,95 +8,162 @@ package main
 import "C"
 
 import (
+	"encoding/json"
+	"fmt"
 	"image"
 	"image/color"
-	"image/draw"
 	"image/png"
+	"io"
 	"math/rand"
+	"net"
 	"os"
+	"time"
 	"unsafe"
+
+	"github.com/fogleman/gg"
 )
 
-func main() {
+func (app *GaugeBoy) Init() *GaugeBoy {
+	println("GaugeBoy - If you are reading this give it a star on github!")
 	C.init()
-	println("Init SDL OK")
 
-	file, err := os.Open("./assets/golang.png")
+	app.DC = gg.NewContext(640, 480)
+	app.FB, _ = app.DC.Image().(*image.RGBA)
+	app.DC.LoadFontFace("./assets/fonts/Inter.ttf", 25)
+	app.DC.SetRGB(0, 0, 0)
+
+	file, err := os.Open("./assets/imgs/splash.png")
 	if err != nil {
 		panic(err)
 	}
 	defer file.Close()
 
-	pngImage, err := png.Decode(file)
+	app.Splash, err = png.Decode(file)
 	if err != nil {
 		panic(err)
 	}
 
-	img := image.NewRGBA(image.Rect(0, 0, 640, 480))
-	fillColor := color.RGBA{255, 0, 0, 255}
-	for y := 0; y < 40; y++ {
-		for x := 0; x < 300; x++ {
-			img.SetRGBA(x, y, fillColor)
-		}
-	}
+	app.DisplayText("MMP ODB2 Tool!")
 
-	for y := 40; y < 80; y++ {
-		for x := 0; x < 300; x++ {
-			img.SetRGBA(x, y, color.RGBA{0, 255, 0, 255})
-		}
-	}
+	app.Config = &gaugeConfig{}
+	app.Running = true
 
-	for y := 80; y < 120; y++ {
-		for x := 0; x < 300; x++ {
-			img.SetRGBA(x, y, color.RGBA{0, 0, 255, 255})
-		}
-	}
+	go app.RunUI()
+	time.Sleep(4 * time.Second)
+	return app
+}
 
-	draw.Draw(img, image.Rect(40, 40, 40+pngImage.Bounds().Dx(), 40+pngImage.Bounds().Dy()), pngImage, image.Point{0, 0}, draw.Over)
+func (app *GaugeBoy) DisplayText(text string) {
+	app.DC.DrawImage(app.Splash, 0, 0)
+	app.DC.DrawStringWrapped(text, 640/2, 360, 0.5, 1, 600, 1.5, gg.AlignCenter)
+	app.DC.Fill()
 
-	println("osdksdd")
-	finished := false
-	for !finished {
-		println("Looping")
+	app.ShouldRefresh = true
+}
+
+func (app *GaugeBoy) RunUI() {
+	for app.Running {
 		value := C.pollEvents()
 		switch value {
 		case 0:
-			finished = true
+			app.Running = false
 		case 1:
 			for y := 0; y < 480; y++ {
 				for x := 0; x < 640; x++ {
-					img.SetRGBA(x, y, color.RGBA{uint8(rand.Intn(256)), uint8(rand.Intn(256)), uint8(rand.Intn(256)), 255})
+					app.FB.SetRGBA(x, y, color.RGBA{uint8(rand.Intn(256)), uint8(rand.Intn(256)), uint8(rand.Intn(256)), 255})
 				}
 			}
-
-			fillColor := color.RGBA{255, 0, 0, 255}
-			for y := 0; y < 40; y++ {
-				for x := 0; x < 300; x++ {
-					img.SetRGBA(x, y, fillColor)
-				}
-			}
-
-			for y := 40; y < 80; y++ {
-				for x := 0; x < 300; x++ {
-					img.SetRGBA(x, y, color.RGBA{0, 255, 0, 255})
-				}
-			}
-
-			for y := 80; y < 120; y++ {
-				for x := 0; x < 300; x++ {
-					img.SetRGBA(x, y, color.RGBA{0, 0, 255, 255})
-				}
-			}
+			app.ShouldRefresh = true
 		}
-		println("Value: ", value)
 
-		incy := rand.Intn(256)
-		incx := rand.Intn(420)
-
-		draw.Draw(img, image.Rect(incx, incy, incx+pngImage.Bounds().Dx(), incy+pngImage.Bounds().Dy()), pngImage, image.Point{0, 0}, draw.Over)
-
-		C.refreshScreenPtr((*C.uchar)(unsafe.Pointer(&img.Pix[0])))
+		if app.ShouldRefresh {
+			C.refreshScreenPtr((*C.uchar)(unsafe.Pointer(&app.FB.Pix[0])))
+			app.ShouldRefresh = false
+		}
 	}
 
 	C.quit()
+}
+
+func (app *GaugeBoy) Panic(err error) {
+	app.SetupFailed = true
+	app.Connected = false
+	app.DisplayText(err.Error())
+	time.Sleep(3 * time.Second)
+	app.Running = false
+}
+
+func (app *GaugeBoy) Run() {
+	for app.Running {
+		if !app.Connected && !app.SetupFailed {
+			if app.Config.Host == "" && app.Config.Port == "" {
+				configFile, err := os.Open("./assets/gaugeConfig.json")
+				if err != nil {
+					app.Panic(err)
+				}
+
+				jsonData, err := io.ReadAll(configFile)
+				if err != nil {
+					app.Panic(err)
+				}
+
+				if err := json.Unmarshal(jsonData, app.Config); err != nil {
+					app.Panic(err)
+				}
+
+				if app.Config.Host == "" || app.Config.Port == "" {
+					app.Panic(fmt.Errorf("Invalid host and port on gaugeConfig.json"))
+				}
+
+				app.DisplayText("Connecting to " + app.Config.Host + ":" + app.Config.Port + "...\n 10 seconds timeout...")
+				app.Socket, err = net.DialTimeout("tcp", app.Config.Host+":"+app.Config.Port, 10*time.Second)
+				if err != nil {
+					app.Panic(err)
+				}
+
+				app.DisplayText("Connected to " + app.Config.Host + ":" + app.Config.Port + "...")
+				time.Sleep(2 * time.Second)
+
+				if string(app.ODB2ReaderBuffer[:]) != "ELM327 v1.5" {
+					app.DisplayText("Failed to connect to ODB2 Reader...")
+				} else {
+					app.DisplayText("Connected to ODB2 Reader...")
+				}
+			}
+		}
+	}
+}
+
+type gaugeConfig struct {
+	Host string `json:"host"`
+	Port string `json:"port"`
+}
+
+type GaugeBoy struct {
+	Running       bool
+	ShouldRefresh bool
+
+	DC     *gg.Context
+	FB     *image.RGBA
+	Splash image.Image
+
+	Connected   bool
+	SetupFailed bool
+
+	ODB2ReaderBuffer [2048]byte
+
+	Socket net.Conn
+	Config *gaugeConfig
+}
+
+func createApp() *GaugeBoy {
+	return &GaugeBoy{
+		Running: true,
+		FB:      image.NewRGBA(image.Rect(0, 0, 640, 480)),
+	}
+}
+
+func main() {
+	App := createApp()
+	App.Init().Run()
 }
