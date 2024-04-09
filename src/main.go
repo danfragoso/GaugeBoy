@@ -17,6 +17,7 @@ import (
 	"math/rand"
 	"net"
 	"os"
+	"strings"
 	"time"
 	"unsafe"
 
@@ -51,6 +52,54 @@ func (app *GaugeBoy) Init() *GaugeBoy {
 	go app.RunUI()
 	time.Sleep(4 * time.Second)
 	return app
+}
+
+func (app *GaugeBoy) DrawSelectedGauge() {
+	if app.SelectedGauge == nil {
+		app.SelectedGauge = &Gauge{}
+	}
+
+	if !app.SelectedGauge.Initialized {
+		file, err := os.Open("./gauges/rpm/bg.png")
+		if err != nil {
+			panic(err)
+		}
+		defer file.Close()
+
+		bg, err := png.Decode(file)
+		if err != nil {
+			panic(err)
+		}
+		app.SelectedGauge.DC = gg.NewContext(640, 480)
+
+		app.SelectedGauge.DC.DrawImage(bg, 0, 0)
+
+		app.SelectedGauge.DC.LoadFontFace("./assets/fonts/Inter.ttf", 25)
+		app.SelectedGauge.DC.SetColor(color.White)
+
+		app.SelectedGauge.DC.DrawStringWrapped("RPM", 640/2, 300, 0.5, 1, 600, 1.5, gg.AlignCenter)
+
+		app.SelectedGauge.DC.Fill()
+
+		app.SelectedGauge.Initialized = true
+		app.DC.LoadFontFace("./assets/fonts/Inter.ttf", 150)
+		app.DC.SetColor(color.White)
+	}
+
+	app.Inc++
+	rpmMsg, err := app.SendMSG("01 0C")
+	if err != nil {
+		app.Panic(err)
+	}
+
+	rpmBytes := rpmMsg[3:]
+
+	app.DC.DrawImage(app.SelectedGauge.DC.Image(), 0, 0)
+	rpmString := rpmBytes
+	app.DC.DrawStringWrapped(rpmString, 640/2, 240, 0.5, 1, 600, 1.5, gg.AlignCenter)
+	app.DC.Fill()
+
+	app.ShouldRefresh = true
 }
 
 func (app *GaugeBoy) DisplayText(text string) {
@@ -121,17 +170,39 @@ func (app *GaugeBoy) Run() {
 					app.Panic(err)
 				}
 
-				app.DisplayText("Connected to " + app.Config.Host + ":" + app.Config.Port + "...")
-				time.Sleep(2 * time.Second)
+				app.SendMSG("AT D")
+				app.SendMSG("AT Z")
+				app.SendMSG("AT E0")
+				app.SendMSG("AT L0")
+				app.SendMSG("AT S0")
+				app.SendMSG("AT H0")
+				app.SendMSG("AT SP 0")
 
-				if string(app.ODB2ReaderBuffer[:]) != "ELM327 v1.5" {
-					app.DisplayText("Failed to connect to ODB2 Reader...")
-				} else {
-					app.DisplayText("Connected to ODB2 Reader...")
+				if app.LastMsg != "OK" {
+					app.Panic(fmt.Errorf("Failed to configure ODB2; Response: '" + app.LastMsg + "'"))
 				}
+
+				app.Connected = true
+				app.DisplayText("Successfully connected to ODB2")
+				time.Sleep(3 * time.Second)
 			}
+		} else {
+			app.DrawSelectedGauge()
 		}
 	}
+}
+
+func (app *GaugeBoy) SendMSG(msg string) (string, error) {
+	app.Socket.Write([]byte(msg + "\r\n"))
+	time.Sleep(33 * time.Millisecond)
+
+	msgLen, err := app.Socket.Read(app.ODB2ReaderBuffer[:])
+	if err != nil {
+		return "", err
+	}
+
+	app.LastMsg = strings.TrimSpace(string(app.ODB2ReaderBuffer[:msgLen-3]))
+	return app.LastMsg, nil
 }
 
 type gaugeConfig struct {
@@ -151,9 +222,20 @@ type GaugeBoy struct {
 	SetupFailed bool
 
 	ODB2ReaderBuffer [2048]byte
+	LastMsg          string
+
+	Inc int
 
 	Socket net.Conn
 	Config *gaugeConfig
+
+	SelectedGauge *Gauge
+}
+
+type Gauge struct {
+	Initialized bool
+	BG          *image.RGBA
+	DC          *gg.Context
 }
 
 func createApp() *GaugeBoy {
