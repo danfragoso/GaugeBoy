@@ -14,14 +14,15 @@ import (
 	"image/color"
 	"image/png"
 	"io"
-	"math/rand"
 	"net"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 	"unsafe"
 
 	"github.com/fogleman/gg"
+	"golang.org/x/image/font"
 )
 
 func (app *GaugeBoy) Init() *GaugeBoy {
@@ -46,7 +47,7 @@ func (app *GaugeBoy) Init() *GaugeBoy {
 
 	app.DisplayText("MMP ODB2 Tool!")
 
-	app.Config = &gaugeConfig{}
+	app.Config = &Config{}
 	app.Running = true
 
 	go app.RunUI()
@@ -77,26 +78,38 @@ func (app *GaugeBoy) DrawSelectedGauge() {
 		app.SelectedGauge.DC.LoadFontFace("./assets/fonts/Inter.ttf", 25)
 		app.SelectedGauge.DC.SetColor(color.White)
 
-		app.SelectedGauge.DC.DrawStringWrapped("RPM", 640/2, 300, 0.5, 1, 600, 1.5, gg.AlignCenter)
+		app.SelectedGauge.DC.DrawStringWrapped("RPM", 640/2, 330, 0.5, 1, 600, 1.5, gg.AlignCenter)
 
 		app.SelectedGauge.DC.Fill()
 
 		app.SelectedGauge.Initialized = true
-		app.DC.LoadFontFace("./assets/fonts/Inter.ttf", 150)
+		app.DC.LoadFontFace("./gauges/rpm/ar-segument-7-display.ttf", 155)
 		app.DC.SetColor(color.White)
 	}
 
 	app.Inc++
-	rpmMsg, err := app.SendMSG("01 0C")
+	rpmMsg, err := app.SendMSG("010C")
 	if err != nil {
 		app.Panic(err)
 	}
 
-	rpmBytes := rpmMsg[3:]
+	rpmBytes := strings.ReplaceAll(rpmMsg, "410C", "")
+	rpmBytes = strings.ReplaceAll(rpmBytes, " ", "")
+
+	rpmBytes = rpmBytes[:4]
+	rpmValue, err := strconv.ParseInt(rpmBytes, 16, 64)
+	if err != nil {
+		app.DC.LoadFontFace("./assets/fonts/Inter.ttf", 25)
+		app.DC.SetRGB(0, 0, 0)
+
+		app.DisplayText(rpmMsg)
+
+		app.DC.LoadFontFace("./gauges/rpm/ar-segument-7-display.ttf", 155)
+		app.DC.SetColor(color.White)
+	}
 
 	app.DC.DrawImage(app.SelectedGauge.DC.Image(), 0, 0)
-	rpmString := rpmBytes
-	app.DC.DrawStringWrapped(rpmString, 640/2, 240, 0.5, 1, 600, 1.5, gg.AlignCenter)
+	app.DC.DrawStringWrapped(strconv.Itoa(int(rpmValue/4)), 640/2, 275, 0.5, 1, 600, 1.5, gg.AlignCenter)
 	app.DC.Fill()
 
 	app.ShouldRefresh = true
@@ -117,11 +130,6 @@ func (app *GaugeBoy) RunUI() {
 		case 0:
 			app.Running = false
 		case 1:
-			for y := 0; y < 480; y++ {
-				for x := 0; x < 640; x++ {
-					app.FB.SetRGBA(x, y, color.RGBA{uint8(rand.Intn(256)), uint8(rand.Intn(256)), uint8(rand.Intn(256)), 255})
-				}
-			}
 			app.ShouldRefresh = true
 		}
 
@@ -178,7 +186,7 @@ func (app *GaugeBoy) Run() {
 				app.SendMSG("AT H0")
 				app.SendMSG("AT SP 0")
 
-				if app.LastMsg != "OK" {
+				if app.LastMsg == "" {
 					app.Panic(fmt.Errorf("Failed to configure ODB2; Response: '" + app.LastMsg + "'"))
 				}
 
@@ -205,9 +213,22 @@ func (app *GaugeBoy) SendMSG(msg string) (string, error) {
 	return app.LastMsg, nil
 }
 
-type gaugeConfig struct {
-	Host string `json:"host"`
-	Port string `json:"port"`
+type Config struct {
+	Host   string   `json:"host"`
+	Port   string   `json:"port"`
+	Gauges []*Gauge `json:"gauges"`
+}
+
+type Gauge struct {
+	Initialized bool
+	DC          *gg.Context
+	FontFace    font.Face
+
+	Name      string `json:"name"`
+	Type      string `json:"type"`
+	Bg        string `json:"bg"`
+	TextColor string `json:"textColor"`
+	Font      string `json:"font"`
 }
 
 type GaugeBoy struct {
@@ -227,15 +248,9 @@ type GaugeBoy struct {
 	Inc int
 
 	Socket net.Conn
-	Config *gaugeConfig
+	Config *Config
 
 	SelectedGauge *Gauge
-}
-
-type Gauge struct {
-	Initialized bool
-	BG          *image.RGBA
-	DC          *gg.Context
 }
 
 func createApp() *GaugeBoy {

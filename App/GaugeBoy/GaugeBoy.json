@@ -1,0 +1,13 @@
+{
+    "port": "35000",
+    "host": "191.252.200.77",
+    "gauges" : [
+        {
+            "name": "RPM",
+            "type": "rpm",
+            "bg": "./gauges/rpm/bg.png",
+            "textColor": "#ffffff",
+            "font": "./gauges/rpm/ar-segment-7-display.ttf"
+        }
+    ]
+}
