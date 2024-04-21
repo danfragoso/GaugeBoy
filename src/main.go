@@ -11,7 +11,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"image"
-	"image/color"
 	"image/png"
 	"io"
 	"net"
@@ -25,16 +24,19 @@ import (
 	"golang.org/x/image/font"
 )
 
+const SCREEN_WIDTH = 640
+const SCREEN_HEIGHT = 480
+
 func (app *GaugeBoy) Init() *GaugeBoy {
 	println("GaugeBoy - If you are reading this give it a star on github!")
 	C.init()
 
-	app.DC = gg.NewContext(640, 480)
+	app.DC = gg.NewContext(SCREEN_WIDTH, SCREEN_HEIGHT)
 	app.FB, _ = app.DC.Image().(*image.RGBA)
-	app.DC.LoadFontFace("./assets/fonts/Inter.ttf", 25)
+	app.DC.LoadFontFace("./assets/ui_font.ttf", 25)
 	app.DC.SetRGB(0, 0, 0)
 
-	file, err := os.Open("./assets/imgs/splash.png")
+	file, err := os.Open("./assets/splash.png")
 	if err != nil {
 		panic(err)
 	}
@@ -55,13 +57,10 @@ func (app *GaugeBoy) Init() *GaugeBoy {
 	return app
 }
 
-func (app *GaugeBoy) DrawSelectedGauge() {
-	if app.SelectedGauge == nil {
-		app.SelectedGauge = &Gauge{}
-	}
-
-	if !app.SelectedGauge.Initialized {
-		file, err := os.Open("./gauges/rpm/bg.png")
+func (app *GaugeBoy) DrawGauges() {
+	if app.SelectedGauge == nil || !app.SelectedGauge.Initialized {
+		app.SelectedGauge = app.Config.Gauges[0]
+		file, err := os.Open(app.SelectedGauge.Bg)
 		if err != nil {
 			panic(err)
 		}
@@ -71,24 +70,18 @@ func (app *GaugeBoy) DrawSelectedGauge() {
 		if err != nil {
 			panic(err)
 		}
-		app.SelectedGauge.DC = gg.NewContext(640, 480)
 
+		app.SelectedGauge.DC = gg.NewContext(SCREEN_WIDTH, SCREEN_HEIGHT)
 		app.SelectedGauge.DC.DrawImage(bg, 0, 0)
-
-		app.SelectedGauge.DC.LoadFontFace("./assets/fonts/Inter.ttf", 25)
-		app.SelectedGauge.DC.SetColor(color.White)
-
-		app.SelectedGauge.DC.DrawStringWrapped("RPM", 640/2, 330, 0.5, 1, 600, 1.5, gg.AlignCenter)
-
 		app.SelectedGauge.DC.Fill()
 
+		app.DC.LoadFontFace(app.SelectedGauge.Font, app.SelectedGauge.FontSize)
+		app.DC.SetHexColor(app.SelectedGauge.TextColor)
+
 		app.SelectedGauge.Initialized = true
-		app.DC.LoadFontFace("./gauges/rpm/ar-segument-7-display.ttf", 155)
-		app.DC.SetColor(color.White)
 	}
 
-	app.Inc++
-	rpmMsg, err := app.SendMSG("010C")
+	rpmMsg, err := app.SendODB2MSG("010C")
 	if err != nil {
 		app.Panic(err)
 	}
@@ -99,17 +92,17 @@ func (app *GaugeBoy) DrawSelectedGauge() {
 	rpmBytes = rpmBytes[:4]
 	rpmValue, err := strconv.ParseInt(rpmBytes, 16, 64)
 	if err != nil {
-		app.DC.LoadFontFace("./assets/fonts/Inter.ttf", 25)
+		app.DC.LoadFontFace("./assets/ui_font.ttf", 25)
 		app.DC.SetRGB(0, 0, 0)
 
 		app.DisplayText(rpmMsg)
 
-		app.DC.LoadFontFace("./gauges/rpm/ar-segument-7-display.ttf", 155)
-		app.DC.SetColor(color.White)
+		app.DC.LoadFontFace(app.SelectedGauge.Font, app.SelectedGauge.FontSize)
+		app.DC.SetHexColor(app.SelectedGauge.TextColor)
 	}
 
 	app.DC.DrawImage(app.SelectedGauge.DC.Image(), 0, 0)
-	app.DC.DrawStringWrapped(strconv.Itoa(int(rpmValue/4)), 640/2, 275, 0.5, 1, 600, 1.5, gg.AlignCenter)
+	app.DC.DrawStringWrapped(strconv.Itoa(int(rpmValue/4)), app.SelectedGauge.TextX, app.SelectedGauge.TextY, 0.5, 1, SCREEN_WIDTH-40, 1.5, gg.AlignCenter)
 	app.DC.Fill()
 
 	app.ShouldRefresh = true
@@ -117,7 +110,7 @@ func (app *GaugeBoy) DrawSelectedGauge() {
 
 func (app *GaugeBoy) DisplayText(text string) {
 	app.DC.DrawImage(app.Splash, 0, 0)
-	app.DC.DrawStringWrapped(text, 640/2, 360, 0.5, 1, 600, 1.5, gg.AlignCenter)
+	app.DC.DrawStringWrapped(text, SCREEN_WIDTH/2, 360, 0.5, 1, 600, 1.5, gg.AlignCenter)
 	app.DC.Fill()
 
 	app.ShouldRefresh = true
@@ -150,57 +143,67 @@ func (app *GaugeBoy) Panic(err error) {
 	app.Running = false
 }
 
+func (app *GaugeBoy) Configure() {
+	configFile, err := os.Open("./GaugeBoy.json")
+	if err != nil {
+		app.Panic(err)
+	}
+
+	jsonData, err := io.ReadAll(configFile)
+	if err != nil {
+		app.Panic(err)
+	}
+
+	if err := json.Unmarshal(jsonData, app.Config); err != nil {
+		app.Panic(err)
+	}
+
+	if app.Config.Host == "" || app.Config.Port == "" {
+		app.Panic(fmt.Errorf("Invalid host and port on GaugeBoy.json"))
+	}
+
+	app.ConnectODB2()
+}
+
+func (app *GaugeBoy) ConnectODB2() {
+	app.DisplayText("Connecting to " + app.Config.Host + ":" + app.Config.Port + "...\n 10 seconds timeout...")
+
+	var err error
+	app.Socket, err = net.DialTimeout("tcp", app.Config.Host+":"+app.Config.Port, 10*time.Second)
+	if err != nil {
+		app.Panic(err)
+	}
+
+	app.SendODB2MSG("AT D")
+	app.SendODB2MSG("AT Z")
+	app.SendODB2MSG("AT E0")
+	app.SendODB2MSG("AT L0")
+	app.SendODB2MSG("AT S0")
+	app.SendODB2MSG("AT H0")
+	app.SendODB2MSG("AT SP 0")
+
+	if app.LastMsg == "" {
+		app.Panic(fmt.Errorf("Failed to configure ODB2; Response: '" + app.LastMsg + "'"))
+	}
+
+	app.Connected = true
+	app.DisplayText("Connected to ODB2 Device!")
+	time.Sleep(3 * time.Second)
+}
+
 func (app *GaugeBoy) Run() {
 	for app.Running {
 		if !app.Connected && !app.SetupFailed {
 			if app.Config.Host == "" && app.Config.Port == "" {
-				configFile, err := os.Open("./assets/gaugeConfig.json")
-				if err != nil {
-					app.Panic(err)
-				}
-
-				jsonData, err := io.ReadAll(configFile)
-				if err != nil {
-					app.Panic(err)
-				}
-
-				if err := json.Unmarshal(jsonData, app.Config); err != nil {
-					app.Panic(err)
-				}
-
-				if app.Config.Host == "" || app.Config.Port == "" {
-					app.Panic(fmt.Errorf("Invalid host and port on gaugeConfig.json"))
-				}
-
-				app.DisplayText("Connecting to " + app.Config.Host + ":" + app.Config.Port + "...\n 10 seconds timeout...")
-				app.Socket, err = net.DialTimeout("tcp", app.Config.Host+":"+app.Config.Port, 10*time.Second)
-				if err != nil {
-					app.Panic(err)
-				}
-
-				app.SendMSG("AT D")
-				app.SendMSG("AT Z")
-				app.SendMSG("AT E0")
-				app.SendMSG("AT L0")
-				app.SendMSG("AT S0")
-				app.SendMSG("AT H0")
-				app.SendMSG("AT SP 0")
-
-				if app.LastMsg == "" {
-					app.Panic(fmt.Errorf("Failed to configure ODB2; Response: '" + app.LastMsg + "'"))
-				}
-
-				app.Connected = true
-				app.DisplayText("Successfully connected to ODB2")
-				time.Sleep(3 * time.Second)
+				app.Configure()
 			}
 		} else {
-			app.DrawSelectedGauge()
+			app.DrawGauges()
 		}
 	}
 }
 
-func (app *GaugeBoy) SendMSG(msg string) (string, error) {
+func (app *GaugeBoy) SendODB2MSG(msg string) (string, error) {
 	app.Socket.Write([]byte(msg + "\r\n"))
 	time.Sleep(33 * time.Millisecond)
 
@@ -224,11 +227,13 @@ type Gauge struct {
 	DC          *gg.Context
 	FontFace    font.Face
 
-	Name      string `json:"name"`
-	Type      string `json:"type"`
-	Bg        string `json:"bg"`
-	TextColor string `json:"textColor"`
-	Font      string `json:"font"`
+	Type      string  `json:"type"`
+	Bg        string  `json:"bg"`
+	TextColor string  `json:"textColor"`
+	Font      string  `json:"font"`
+	FontSize  float64 `json:"fontSize"`
+	TextX     float64 `json:"textX"`
+	TextY     float64 `json:"textY"`
 }
 
 type GaugeBoy struct {
@@ -245,8 +250,6 @@ type GaugeBoy struct {
 	ODB2ReaderBuffer [2048]byte
 	LastMsg          string
 
-	Inc int
-
 	Socket net.Conn
 	Config *Config
 
@@ -256,7 +259,7 @@ type GaugeBoy struct {
 func createApp() *GaugeBoy {
 	return &GaugeBoy{
 		Running: true,
-		FB:      image.NewRGBA(image.Rect(0, 0, 640, 480)),
+		FB:      image.NewRGBA(image.Rect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT)),
 	}
 }
 

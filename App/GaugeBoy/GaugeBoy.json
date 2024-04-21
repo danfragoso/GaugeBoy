@@ -3,11 +3,22 @@
     "host": "191.252.200.77",
     "gauges" : [
         {
-            "name": "RPM",
             "type": "rpm",
-            "bg": "./gauges/rpm/bg.png",
+            "bg": "./gauges/subawu/bg.png",
             "textColor": "#ffffff",
-            "font": "./gauges/rpm/ar-segment-7-display.ttf"
+            "textX": 320,
+            "textY": 275,
+            "font": "./gauges/subawu/7-segment.ttf",
+            "fontSize": 155
+        },
+        {
+            "type": "rpm",
+            "bg": "./gauges/civic/si.png",
+            "textColor": "#FF815A",
+            "textX": 320,
+            "textY": 360,
+            "font": "./gauges/civic/7-segment.ttf",
+            "fontSize": 165
         }
     ]
 }
