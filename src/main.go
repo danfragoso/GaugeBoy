@@ -57,55 +57,71 @@ func (app *GaugeBoy) Init() *GaugeBoy {
 	return app
 }
 
-func (app *GaugeBoy) DrawGauges() {
-	if app.SelectedGauge == nil || !app.SelectedGauge.Initialized {
-		app.SelectedGauge = app.Config.Gauges[0]
-		file, err := os.Open(app.SelectedGauge.Bg)
-		if err != nil {
-			panic(err)
-		}
-		defer file.Close()
+func (app *GaugeBoy) InitSelectedGauge() {
+	newGauge := app.Config.Gauges[app.SelectedGaugeIndex]
+	file, err := os.Open(newGauge.Bg)
+	if err != nil {
+		panic(err)
+	}
+	defer file.Close()
 
-		bg, err := png.Decode(file)
-		if err != nil {
-			panic(err)
-		}
-
-		app.SelectedGauge.DC = gg.NewContext(SCREEN_WIDTH, SCREEN_HEIGHT)
-		app.SelectedGauge.DC.DrawImage(bg, 0, 0)
-		app.SelectedGauge.DC.Fill()
-
-		app.DC.LoadFontFace(app.SelectedGauge.Font, app.SelectedGauge.FontSize)
-		app.DC.SetHexColor(app.SelectedGauge.TextColor)
-
-		app.SelectedGauge.Initialized = true
+	bg, err := png.Decode(file)
+	if err != nil {
+		panic(err)
 	}
 
-	rpmMsg, err := app.SendODB2MSG("010C")
+	newGauge.DC = gg.NewContext(SCREEN_WIDTH, SCREEN_HEIGHT)
+	newGauge.DC.DrawImage(bg, 0, 0)
+	newGauge.DC.Fill()
+
+	newGauge.FontFace, err = gg.LoadFontFace(newGauge.Font, newGauge.FontSize)
 	if err != nil {
 		app.Panic(err)
 	}
 
-	rpmBytes := strings.ReplaceAll(rpmMsg, "410C", "")
-	rpmBytes = strings.ReplaceAll(rpmBytes, " ", "")
+	newGauge.Initialized = true
+	app.SelectedGauge = newGauge
+}
 
-	rpmBytes = rpmBytes[:4]
-	rpmValue, err := strconv.ParseInt(rpmBytes, 16, 64)
-	if err != nil {
-		app.DC.LoadFontFace("./assets/ui_font.ttf", 25)
-		app.DC.SetRGB(0, 0, 0)
+func (app *GaugeBoy) DrawGauges() {
+	if app.SelectedGauge != nil && app.SelectedGauge.Initialized {
+		rpmMsg, err := app.SendODB2MSG("010C")
+		if err != nil {
+			app.Panic(err)
+		}
 
-		app.DisplayText(rpmMsg)
+		rpmBytes := strings.ReplaceAll(rpmMsg, "410C", "")
+		rpmBytes = strings.ReplaceAll(rpmBytes, " ", "")
 
-		app.DC.LoadFontFace(app.SelectedGauge.Font, app.SelectedGauge.FontSize)
+		rpmBytes = rpmBytes[:4]
+		rpmValue, err := strconv.ParseInt(rpmBytes, 16, 64)
+		if err != nil {
+			app.DC.LoadFontFace("./assets/ui_font.ttf", 25)
+			app.DC.SetRGB(0, 0, 0)
+
+			app.DisplayText(rpmMsg)
+		}
+
+		app.DC.DrawImage(app.SelectedGauge.DC.Image(), 0, 0)
+		app.DC.SetFontFace(app.SelectedGauge.FontFace)
 		app.DC.SetHexColor(app.SelectedGauge.TextColor)
+		app.DC.DrawStringWrapped(strconv.Itoa(int(rpmValue/4)), app.SelectedGauge.TextX, app.SelectedGauge.TextY, 0.5, 1, SCREEN_WIDTH-40, 1.5, gg.AlignCenter)
+		app.DC.Fill()
+
+		app.ShouldRefresh = true
+	}
+}
+
+func (app *GaugeBoy) SelectNextGauge() {
+	app.SelectedGauge = nil
+
+	if app.SelectedGaugeIndex+1 >= len(app.Config.Gauges) {
+		app.SelectedGaugeIndex = 0
+	} else {
+		app.SelectedGaugeIndex++
 	}
 
-	app.DC.DrawImage(app.SelectedGauge.DC.Image(), 0, 0)
-	app.DC.DrawStringWrapped(strconv.Itoa(int(rpmValue/4)), app.SelectedGauge.TextX, app.SelectedGauge.TextY, 0.5, 1, SCREEN_WIDTH-40, 1.5, gg.AlignCenter)
-	app.DC.Fill()
-
-	app.ShouldRefresh = true
+	app.InitSelectedGauge()
 }
 
 func (app *GaugeBoy) DisplayText(text string) {
@@ -118,12 +134,14 @@ func (app *GaugeBoy) DisplayText(text string) {
 
 func (app *GaugeBoy) RunUI() {
 	for app.Running {
-		value := C.pollEvents()
+		value := int(C.pollEvents())
 		switch value {
 		case 0:
 			app.Running = false
 		case 1:
-			app.ShouldRefresh = true
+			app.SelectNextGauge()
+		default:
+			println("Unknown event: ", value)
 		}
 
 		if app.ShouldRefresh {
@@ -163,6 +181,9 @@ func (app *GaugeBoy) Configure() {
 	}
 
 	app.ConnectODB2()
+
+	app.SelectedGaugeIndex = 0
+	app.InitSelectedGauge()
 }
 
 func (app *GaugeBoy) ConnectODB2() {
@@ -253,7 +274,8 @@ type GaugeBoy struct {
 	Socket net.Conn
 	Config *Config
 
-	SelectedGauge *Gauge
+	SelectedGauge      *Gauge
+	SelectedGaugeIndex int
 }
 
 func createApp() *GaugeBoy {
