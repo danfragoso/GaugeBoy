@@ -28,8 +28,10 @@ const SCREEN_WIDTH = 640
 const SCREEN_HEIGHT = 480
 
 func (app *GaugeBoy) Init() *GaugeBoy {
-	println("GaugeBoy - If you are reading this give it a star on github!")
+	log("Initing App...")
+	log("SDL init...")
 	C.init()
+	log("SDL init ok!")
 
 	app.DC = gg.NewContext(SCREEN_WIDTH, SCREEN_HEIGHT)
 	app.FB, _ = app.DC.Image().(*image.RGBA)
@@ -38,12 +40,14 @@ func (app *GaugeBoy) Init() *GaugeBoy {
 
 	file, err := os.Open("./assets/splash.png")
 	if err != nil {
+		log(fmt.Sprintf("Failed to load splash: %v", err))
 		panic(err)
 	}
 	defer file.Close()
 
 	app.Splash, err = png.Decode(file)
 	if err != nil {
+		log(fmt.Sprintf("Failed to decode splash: %v", err))
 		panic(err)
 	}
 
@@ -52,8 +56,7 @@ func (app *GaugeBoy) Init() *GaugeBoy {
 	app.Config = &Config{}
 	app.Running = true
 
-	go app.RunUI()
-	time.Sleep(4 * time.Second)
+	log("App init OK!")
 	return app
 }
 
@@ -83,32 +86,68 @@ func (app *GaugeBoy) InitSelectedGauge() {
 	app.SelectedGauge = newGauge
 }
 
+func (app *GaugeBoy) DrawRPMGauge() {
+	rpmMsg, err := app.SendODB2MSG("010C")
+	if err != nil {
+		app.Panic(err)
+	}
+
+	rpmBytes := strings.ReplaceAll(rpmMsg, "410C", "")
+	rpmBytes = strings.ReplaceAll(rpmBytes, " ", "")
+
+	rpmBytes = rpmBytes[:4]
+	rpmValue, err := strconv.ParseInt(rpmBytes, 16, 64)
+	if err != nil {
+		app.DC.LoadFontFace("./assets/ui_font.ttf", 25)
+		app.DC.SetRGB(0, 0, 0)
+
+		app.DisplayText(rpmMsg)
+	}
+
+	app.DC.DrawImage(app.SelectedGauge.DC.Image(), 0, 0)
+	app.DC.SetFontFace(app.SelectedGauge.FontFace)
+	app.DC.SetHexColor(app.SelectedGauge.TextColor)
+	app.DC.DrawStringWrapped(strconv.Itoa(int(rpmValue/4)), app.SelectedGauge.TextX, app.SelectedGauge.TextY, 0.5, 1, SCREEN_WIDTH-40, 1.5, gg.AlignCenter)
+	app.DC.Fill()
+
+	app.ShouldRefresh = true
+}
+
+func (app *GaugeBoy) DrawSpeedGauge() {
+	speedMsg, err := app.SendODB2MSG("010D")
+	if err != nil {
+		app.Panic(err)
+	}
+
+	speedBytes := strings.ReplaceAll(speedMsg, "410D", "")
+	speedBytes = strings.ReplaceAll(speedBytes, " ", "")
+
+	speedBytes = speedBytes[:2]
+	speedValue, err := strconv.ParseInt(speedBytes, 16, 64)
+	if err != nil {
+		app.DC.LoadFontFace("./assets/ui_font.ttf", 25)
+		app.DC.SetRGB(0, 0, 0)
+
+		app.DisplayText(speedMsg)
+	}
+
+	app.DC.DrawImage(app.SelectedGauge.DC.Image(), 0, 0)
+	app.DC.SetFontFace(app.SelectedGauge.FontFace)
+	app.DC.SetHexColor(app.SelectedGauge.TextColor)
+	app.DC.DrawStringWrapped(strconv.Itoa(int(speedValue)), app.SelectedGauge.TextX, app.SelectedGauge.TextY, 0.5, 1, SCREEN_WIDTH-40, 1.5, gg.AlignCenter)
+	app.DC.Fill()
+
+	app.ShouldRefresh = true
+}
+
 func (app *GaugeBoy) DrawGauges() {
 	if app.SelectedGauge != nil && app.SelectedGauge.Initialized {
-		rpmMsg, err := app.SendODB2MSG("010C")
-		if err != nil {
-			app.Panic(err)
+		switch app.SelectedGauge.Type {
+		case "rpm":
+			app.DrawRPMGauge()
+		case "speed":
+			app.DrawSpeedGauge()
 		}
-
-		rpmBytes := strings.ReplaceAll(rpmMsg, "410C", "")
-		rpmBytes = strings.ReplaceAll(rpmBytes, " ", "")
-
-		rpmBytes = rpmBytes[:4]
-		rpmValue, err := strconv.ParseInt(rpmBytes, 16, 64)
-		if err != nil {
-			app.DC.LoadFontFace("./assets/ui_font.ttf", 25)
-			app.DC.SetRGB(0, 0, 0)
-
-			app.DisplayText(rpmMsg)
-		}
-
-		app.DC.DrawImage(app.SelectedGauge.DC.Image(), 0, 0)
-		app.DC.SetFontFace(app.SelectedGauge.FontFace)
-		app.DC.SetHexColor(app.SelectedGauge.TextColor)
-		app.DC.DrawStringWrapped(strconv.Itoa(int(rpmValue/4)), app.SelectedGauge.TextX, app.SelectedGauge.TextY, 0.5, 1, SCREEN_WIDTH-40, 1.5, gg.AlignCenter)
-		app.DC.Fill()
-
-		app.ShouldRefresh = true
 	}
 }
 
@@ -134,34 +173,29 @@ func (app *GaugeBoy) DisplayText(text string) {
 
 func (app *GaugeBoy) RunUI() {
 	for app.Running {
-		value := int(C.pollEvents())
-		switch value {
-		case 0:
-			app.Running = false
-		case 1:
-			app.SelectNextGauge()
-		default:
-			println("Unknown event: ", value)
-		}
-
 		if app.ShouldRefresh {
 			C.refreshScreenPtr((*C.uchar)(unsafe.Pointer(&app.FB.Pix[0])))
 			app.ShouldRefresh = false
 		}
 	}
 
-	C.quit()
+	//C.quit()
 }
 
 func (app *GaugeBoy) Panic(err error) {
+	log(fmt.Sprintf("Panic: %v", err))
+
 	app.SetupFailed = true
 	app.Connected = false
+	app.DC.LoadFontFace("./assets/ui_font.ttf", 25)
+	app.DC.SetRGB(0, 0, 0)
 	app.DisplayText(err.Error())
 	time.Sleep(3 * time.Second)
 	app.Running = false
 }
 
 func (app *GaugeBoy) Configure() {
+	log("Configuring App...")
 	configFile, err := os.Open("./GaugeBoy.json")
 	if err != nil {
 		app.Panic(err)
@@ -187,6 +221,7 @@ func (app *GaugeBoy) Configure() {
 }
 
 func (app *GaugeBoy) ConnectODB2() {
+	log("Connecting to ODB2 Device...")
 	app.DisplayText("Connecting to " + app.Config.Host + ":" + app.Config.Port + "...\n 10 seconds timeout...")
 
 	var err error
@@ -208,32 +243,28 @@ func (app *GaugeBoy) ConnectODB2() {
 	}
 
 	app.Connected = true
+	log("Connected to ODB2 Device!")
 	app.DisplayText("Connected to ODB2 Device!")
 	time.Sleep(3 * time.Second)
 }
 
-func (app *GaugeBoy) Run() {
-	for app.Running {
-		if !app.Connected && !app.SetupFailed {
-			if app.Config.Host == "" && app.Config.Port == "" {
-				app.Configure()
-			}
-		} else {
-			app.DrawGauges()
-		}
-	}
-}
-
 func (app *GaugeBoy) SendODB2MSG(msg string) (string, error) {
-	app.Socket.Write([]byte(msg + "\r\n"))
-	time.Sleep(33 * time.Millisecond)
+	log(fmt.Sprintf("Sending ODB2 MSG: %v", msg))
+	_, err := app.Socket.Write([]byte(msg + "\r\n"))
+	if err != nil {
+		log(fmt.Sprintf("Failed to send ODB2 MSG: %v", err))
+		return "", err
+	}
+	time.Sleep(13 * time.Millisecond)
 
 	msgLen, err := app.Socket.Read(app.ODB2ReaderBuffer[:])
 	if err != nil {
+		log(fmt.Sprintf("Failed to read ODB2 response: %v", err))
 		return "", err
 	}
 
 	app.LastMsg = strings.TrimSpace(string(app.ODB2ReaderBuffer[:msgLen-3]))
+	log(fmt.Sprintf("ODB2 Response: %v", app.LastMsg))
 	return app.LastMsg, nil
 }
 
@@ -286,6 +317,40 @@ func createApp() *GaugeBoy {
 }
 
 func main() {
+	log("\n\n\n-----------")
+	log("GaugeBoy started!")
 	App := createApp()
-	App.Init().Run()
+	App.Init()
+
+	go App.RunUI()
+	time.Sleep(2 * time.Second)
+
+	keyPresses := make(chan Key)
+	go listenKeyPresses(keyPresses)
+
+	for App.Running {
+		select {
+		case key := <-keyPresses:
+			switch key {
+			case MENU:
+				App.Panic(fmt.Errorf("Exiting..."))
+
+			case A:
+				App.SelectNextGauge()
+			}
+
+		default:
+			if !App.Connected && !App.SetupFailed {
+				if App.Config.Host == "" && App.Config.Port == "" {
+					App.Configure()
+				}
+			} else {
+				App.DrawGauges()
+			}
+		}
+	}
+}
+
+func C_GetKeyPress() int {
+	return int(C.pollEvents())
 }

@@ -14,20 +14,8 @@ SDL_Surface *background;
 int pollEvents() {
     SDL_Event event;
     while (SDL_PollEvent(&event)) {
-        if (event.type == SDL_QUIT) {
-            return 0;
-            continue;
-        }
-
         if (event.type == SDL_KEYUP) {
-            switch (event.key.keysym.sym) {
-                case SDLK_SPACE:
-                    return 1;
-                    break;
-                case SDLK_ESCAPE:
-                    return 0;
-                    continue;
-            }
+            return event.key.keysym.sym;
         }
     }
 

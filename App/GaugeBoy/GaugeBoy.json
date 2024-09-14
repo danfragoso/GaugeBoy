@@ -19,6 +19,15 @@
             "textY": 360,
             "font": "./gauges/civic/7-segment.ttf",
             "fontSize": 165
+        },
+        {
+            "type": "speed",
+            "bg": "./gauges/sti-speed/bg.png",
+            "textColor": "#FF269C",
+            "textX": 320,
+            "textY": 360,
+            "font": "./gauges/sti-speed/7-segment.ttf",
+            "fontSize": 165
         }
     ]
 }
